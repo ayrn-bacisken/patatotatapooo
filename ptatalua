@@ -1,0 +1,1334 @@
+--[[
+    Yazılım Erişim ve Giriş Kontrol Paneli
+    - Harici kütüphane yok: SHA-256 saf Luau (bit32) ile yazılmıştır.
+    - Şifrelerin düz metni kodda tutulmaz, yalnızca SHA-256 özetleri saklanır.
+    - Her çalıştırmada 3 şifreden biri rastgele seçilir ve kullanıcıdan istenir.
+    - Doğru şifrede panel Destroy edilir ve StartMainScript() çağrılır.
+    - Menü kodunun tamamı StartMainScript() içindedir; yanlış/eksik şifrede hiçbir kısmı çalışmaz.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+while not Players.LocalPlayer do
+    task.wait()
+end
+local LocalPlayer = Players.LocalPlayer
+
+-- ==========================================================
+-- 1) ŞİFRE ÖZETLERİ (SHA-256, geri döndürülemez)
+-- ==========================================================
+local PASSWORD_HASHES = {
+    "e992e3d7285e69eaf76fc3f8a3926c6c97f5c639b7d1f0c34c375a8dc673d4ea", -- Şifre 1
+    "a4295d5e37da8581d2eaf8e5f6d328f31554d68d8f0b7c729298c89333e67f15", -- Şifre 2
+    "d789b230a7c23eef0bf126048199214ef89793e391e5fad2d581799f8d56e365", -- Şifre 3
+}
+
+local MAX_ATTEMPTS = 5
+local LOCK_SECONDS = 8
+
+-- ==========================================================
+-- 2) SAF LUAU SHA-256
+-- ==========================================================
+-- [[SHA256_BEGIN]]
+local SHA256_K = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+
+local function sha256(message)
+    local band, bxor, bnot = bit32.band, bit32.bxor, bit32.bnot
+    local rrotate, rshift = bit32.rrotate, bit32.rshift
+    local MOD = 4294967296
+
+    local function word(n)
+        return string.char(
+            rshift(n, 24) % 256,
+            rshift(n, 16) % 256,
+            rshift(n, 8) % 256,
+            n % 256
+        )
+    end
+
+    -- Dolgu: 0x80, sıfırlar, 64 bitlik uzunluk (big-endian)
+    local len = #message
+    local bitLen = len * 8
+    local padded = message
+        .. "\128"
+        .. string.rep("\0", (55 - len) % 64)
+        .. word(math.floor(bitLen / MOD))
+        .. word(bitLen % MOD)
+
+    local H = {
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    }
+    local w = {}
+
+    for chunk = 1, #padded, 64 do
+        for i = 1, 16 do
+            local p = chunk + (i - 1) * 4
+            local b1, b2, b3, b4 = string.byte(padded, p, p + 3)
+            w[i] = b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+        end
+        for i = 17, 64 do
+            local w15, w2 = w[i - 15], w[i - 2]
+            local s0 = bxor(rrotate(w15, 7), rrotate(w15, 18), rshift(w15, 3))
+            local s1 = bxor(rrotate(w2, 17), rrotate(w2, 19), rshift(w2, 10))
+            w[i] = (w[i - 16] + s0 + w[i - 7] + s1) % MOD
+        end
+
+        local a, b, c, d, e, f, g, h = H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8]
+        for i = 1, 64 do
+            local S1 = bxor(rrotate(e, 6), rrotate(e, 11), rrotate(e, 25))
+            local ch = bxor(band(e, f), band(bnot(e), g))
+            local t1 = (h + S1 + ch + SHA256_K[i] + w[i]) % MOD
+            local S0 = bxor(rrotate(a, 2), rrotate(a, 13), rrotate(a, 22))
+            local maj = bxor(band(a, b), band(a, c), band(b, c))
+            local t2 = (S0 + maj) % MOD
+
+            h = g
+            g = f
+            f = e
+            e = (d + t1) % MOD
+            d = c
+            c = b
+            b = a
+            a = (t1 + t2) % MOD
+        end
+
+        H[1] = (H[1] + a) % MOD
+        H[2] = (H[2] + b) % MOD
+        H[3] = (H[3] + c) % MOD
+        H[4] = (H[4] + d) % MOD
+        H[5] = (H[5] + e) % MOD
+        H[6] = (H[6] + f) % MOD
+        H[7] = (H[7] + g) % MOD
+        H[8] = (H[8] + h) % MOD
+    end
+
+    return string.format(
+        "%08x%08x%08x%08x%08x%08x%08x%08x",
+        H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8]
+    )
+end
+-- [[SHA256_END]]
+
+-- ==========================================================
+-- 3) ANA FONKSİYON (aşağıda tanımlanır)
+-- ==========================================================
+local StartMainScript
+
+-- ==========================================================
+-- 4) ARAYÜZ: ÇİFT KATMANLI PARENT (CoreGui -> PlayerGui)
+-- ==========================================================
+local GUI_NAME = "AccessControlPanel"
+
+local function mountGui(gui)
+    -- 1. katman: CoreGui (yetki yoksa pcall hata yakalar)
+    local coreGui
+    local okCore = pcall(function()
+        coreGui = game:GetService("CoreGui")
+        gui.Parent = coreGui
+    end)
+    if okCore and coreGui and gui.Parent == coreGui then
+        return coreGui
+    end
+
+    -- 2. katman: PlayerGui
+    gui.Parent = nil
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    gui.Parent = playerGui
+    return playerGui
+end
+
+local function removeOldPanels()
+    pcall(function()
+        local old = game:GetService("CoreGui"):FindFirstChild(GUI_NAME)
+        if old then
+            old:Destroy()
+        end
+    end)
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        local old = playerGui:FindFirstChild(GUI_NAME)
+        if old then
+            old:Destroy()
+        end
+    end
+end
+
+-- ==========================================================
+-- 5) GİRİŞ PANELİ
+-- ==========================================================
+local THEME = {
+    Backdrop = Color3.fromRGB(0, 0, 0),
+    Panel = Color3.fromRGB(20, 20, 27),
+    PanelStroke = Color3.fromRGB(48, 48, 66),
+    Field = Color3.fromRGB(30, 30, 41),
+    Accent = Color3.fromRGB(99, 102, 241),
+    AccentHover = Color3.fromRGB(121, 124, 255),
+    Text = Color3.fromRGB(236, 236, 246),
+    Muted = Color3.fromRGB(140, 140, 165),
+    Error = Color3.fromRGB(248, 90, 90),
+    Success = Color3.fromRGB(70, 210, 120),
+}
+
+local function addCorner(parent, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius)
+    corner.Parent = parent
+    return corner
+end
+
+local function addStroke(parent, color, thickness)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color
+    stroke.Thickness = thickness
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = parent
+    return stroke
+end
+
+local function makeLabel(parent, text, font, size, color, height, order)
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(1, 0, 0, height)
+    label.Font = font
+    label.Text = text
+    label.TextSize = size
+    label.TextColor3 = color
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.LayoutOrder = order
+    label.Parent = parent
+    return label
+end
+
+local function openAccessPanel()
+    removeOldPanels()
+
+    local expectedIndex = Random.new():NextInteger(1, #PASSWORD_HASHES)
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = GUI_NAME
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 1000
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local backdrop = Instance.new("Frame")
+    backdrop.Name = "Backdrop"
+    backdrop.Size = UDim2.fromScale(1, 1)
+    backdrop.BackgroundColor3 = THEME.Backdrop
+    backdrop.BackgroundTransparency = 0.45
+    backdrop.BorderSizePixel = 0
+    backdrop.Parent = gui
+
+    local main = Instance.new("Frame")
+    main.Name = "Main"
+    main.AnchorPoint = Vector2.new(0.5, 0.5)
+    main.Position = UDim2.fromScale(0.5, 0.5)
+    main.Size = UDim2.fromOffset(380, 300)
+    main.BackgroundColor3 = THEME.Panel
+    main.BorderSizePixel = 0
+    main.Parent = backdrop
+    addCorner(main, 16)
+    addStroke(main, THEME.PanelStroke, 1.5)
+
+    local scale = Instance.new("UIScale")
+    scale.Scale = 0.9
+    scale.Parent = main
+
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.Size = UDim2.fromScale(1, 1)
+    content.BackgroundTransparency = 1
+    content.Parent = main
+
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop = UDim.new(0, 24)
+    padding.PaddingBottom = UDim.new(0, 24)
+    padding.PaddingLeft = UDim.new(0, 26)
+    padding.PaddingRight = UDim.new(0, 26)
+    padding.Parent = content
+
+    local layout = Instance.new("UIListLayout")
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.Padding = UDim.new(0, 12)
+    layout.Parent = content
+
+    makeLabel(content, "Yazılım Erişim Paneli", Enum.Font.GothamBold, 21, THEME.Text, 28, 1)
+    makeLabel(content, "Devam etmek için kimlik doğrulaması gerekli", Enum.Font.Gotham, 13, THEME.Muted, 18, 2)
+
+    -- İstenen şifre indeksi
+    local pill = Instance.new("Frame")
+    pill.Name = "IndexPill"
+    pill.Size = UDim2.fromOffset(190, 28)
+    pill.BackgroundColor3 = THEME.Accent
+    pill.BackgroundTransparency = 0.82
+    pill.BorderSizePixel = 0
+    pill.LayoutOrder = 3
+    pill.Parent = content
+    addCorner(pill, 14)
+    addStroke(pill, THEME.Accent, 1)
+
+    local pillText = Instance.new("TextLabel")
+    pillText.BackgroundTransparency = 1
+    pillText.Size = UDim2.fromScale(1, 1)
+    pillText.Font = Enum.Font.GothamBold
+    pillText.Text = ("Lütfen %d. şifreyi girin"):format(expectedIndex)
+    pillText.TextSize = 13
+    pillText.TextColor3 = THEME.Text
+    pillText.Parent = pill
+
+    -- Şifre kutusu
+    local input = Instance.new("TextBox")
+    input.Name = "PasswordInput"
+    input.Size = UDim2.new(1, 0, 0, 44)
+    input.BackgroundColor3 = THEME.Field
+    input.BorderSizePixel = 0
+    input.Font = Enum.Font.Gotham
+    input.TextSize = 15
+    input.TextColor3 = THEME.Text
+    input.PlaceholderText = "Şifreyi buraya yazın"
+    input.PlaceholderColor3 = THEME.Muted
+    input.Text = ""
+    input.ClearTextOnFocus = false
+    input.TextXAlignment = Enum.TextXAlignment.Left
+    input.LayoutOrder = 4
+    input.Parent = content
+    addCorner(input, 10)
+    local inputStroke = addStroke(input, THEME.PanelStroke, 1.2)
+
+    local inputPad = Instance.new("UIPadding")
+    inputPad.PaddingLeft = UDim.new(0, 14)
+    inputPad.PaddingRight = UDim.new(0, 14)
+    inputPad.Parent = input
+
+    -- Giriş butonu
+    local button = Instance.new("TextButton")
+    button.Name = "LoginButton"
+    button.Size = UDim2.new(1, 0, 0, 44)
+    button.BackgroundColor3 = THEME.Accent
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 15
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Text = "Giriş"
+    button.LayoutOrder = 5
+    button.Parent = content
+    addCorner(button, 10)
+
+    local status = makeLabel(content, "", Enum.Font.GothamMedium, 13, THEME.Muted, 18, 6)
+
+    -- Etkileşim animasyonları
+    local function tween(obj, time, props)
+        TweenService:Create(obj, TweenInfo.new(time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+    end
+
+    button.MouseEnter:Connect(function()
+        tween(button, 0.15, { BackgroundColor3 = THEME.AccentHover })
+    end)
+    button.MouseLeave:Connect(function()
+        tween(button, 0.15, { BackgroundColor3 = THEME.Accent })
+    end)
+    input.Focused:Connect(function()
+        tween(inputStroke, 0.15, { Color = THEME.Accent })
+    end)
+    input.FocusLost:Connect(function()
+        tween(inputStroke, 0.15, { Color = THEME.PanelStroke })
+    end)
+
+    local function shake()
+        local base = main.Position
+        for _ = 1, 3 do
+            for _, dx in ipairs({ 10, -10 }) do
+                if not main.Parent then
+                    return
+                end
+                main.Position = base + UDim2.fromOffset(dx, 0)
+                task.wait(0.035)
+            end
+        end
+        if main.Parent then
+            main.Position = base
+        end
+    end
+
+    -- Doğrulama mantığı
+    local failedAttempts = 0
+    local locked = false
+
+    local function attempt()
+        if locked then
+            return
+        end
+
+        local entered = string.match(input.Text, "^%s*(.-)%s*$") or ""
+        if entered == "" then
+            status.TextColor3 = THEME.Error
+            status.Text = "Lütfen şifreyi girin."
+            return
+        end
+
+        if sha256(entered) == PASSWORD_HASHES[expectedIndex] then
+            status.TextColor3 = THEME.Success
+            status.Text = "Doğrulandı."
+            gui:Destroy() -- paneli tamamen sil
+            StartMainScript()
+            return
+        end
+
+        failedAttempts += 1
+        input.Text = ""
+        status.TextColor3 = THEME.Error
+        status.Text = ("Hatalı şifre (%d/%d)"):format(failedAttempts, MAX_ATTEMPTS)
+        task.spawn(shake)
+
+        if failedAttempts >= MAX_ATTEMPTS then
+            locked = true
+            task.spawn(function()
+                for remaining = LOCK_SECONDS, 1, -1 do
+                    if not gui.Parent then
+                        return
+                    end
+                    status.Text = ("Çok fazla deneme. %d sn bekleyin."):format(remaining)
+                    task.wait(1)
+                end
+                if not gui.Parent then
+                    return
+                end
+                failedAttempts = 0
+                locked = false
+                status.TextColor3 = THEME.Muted
+                status.Text = ""
+            end)
+        end
+    end
+
+    button.MouseButton1Click:Connect(attempt)
+    input.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            attempt()
+        end
+    end)
+
+    mountGui(gui)
+    tween(scale, 0.25, { Scale = 1 })
+end
+
+-- ==========================================================
+-- 6) ANA FONKSİYON
+-- ==========================================================
+function StartMainScript()
+    print("Giriş Başarılı, Sistem Çalışıyor")
+
+    -- ==========================================================
+    -- MENÜ KODU: yalnızca doğru şifreden sonra çalışır
+    -- ==========================================================
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local UIS = game:GetService("UserInputService")
+    local TweenService = game:GetService("TweenService")
+    local Workspace = game:GetService("Workspace")
+
+    local LocalPlayer = Players.LocalPlayer
+    local Camera = Workspace.CurrentCamera
+    local Mouse = LocalPlayer:GetMouse()
+
+    -- ==========================================
+    -- DEĞİŞKENLER & DEĞERLER
+    -- ==========================================
+    local aimbotActive = false
+    local aimbotSmoothActive = true
+    local aimSmoothness = 0.5
+    local teamCheckActive = false
+    local wallCheckActive = true
+
+    local spinbotActive = false
+    local spinSpeed = 50
+    local spinAngle = 0
+
+    local speedActive = false
+    local customSpeedValue = 32
+
+    local flyActive = false
+    local flySpeed = 60
+    local invisibleActive = false
+    local noclipActive = false
+    local infJumpActive = false
+
+    local clickTpActive = false
+    local clickTpKey = Enum.KeyCode.T
+    local bindingTeleportKey = false
+
+    local aimbotKey = Enum.KeyCode.J
+    local bindingAimbotKey = false
+
+    -- FOV DEĞİŞKENLERİ
+    local fovVisible = true
+    local fovRadius = 150
+    local mainThemeColor = Color3.fromRGB(148, 0, 211) 
+
+    -- GİZLİ ESP DEĞİŞKENİ
+    local hiddenEspActive = false
+
+    local filterExclude = Enum.RaycastFilterType.Exclude or Enum.RaycastFilterType.Blacklist
+
+    -- ==========================================
+    -- GİZLİ İŞARETLEYİCİ (SADECE "!")
+    -- ==========================================
+    local function createHiddenESP(plr)
+        local AlertText = Drawing.new("Text")
+        AlertText.Visible = false
+        AlertText.Text = "!"
+        AlertText.Size = 28
+        AlertText.Color = Color3.fromRGB(255, 40, 40)
+        AlertText.Outline = true
+        AlertText.OutlineColor = Color3.new(0, 0, 0)
+        AlertText.Center = true
+        AlertText.Font = 2 
+
+        local function update()
+            local connection
+            connection = RunService.RenderStepped:Connect(function()
+                if hiddenEspActive and plr.Character and plr.Character:FindFirstChild("Head") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 and plr ~= LocalPlayer then
+                    local head = plr.Character.Head
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 2, 0))
+
+                    if onScreen then
+                        AlertText.Position = Vector2.new(screenPos.X, screenPos.Y)
+                        AlertText.Visible = true
+                    else
+                        AlertText.Visible = false
+                    end
+                else
+                    AlertText.Visible = false
+                    if not plr.Parent then
+                        connection:Disconnect()
+                        AlertText:Remove()
+                    end
+                end
+            end)
+        end
+        coroutine.wrap(update)()
+    end
+
+    for _, v in pairs(Players:GetPlayers()) do createHiddenESP(v) end
+    Players.PlayerAdded:Connect(function(v) createHiddenESP(v) end)
+
+    -- ==========================================
+    -- XENO SOVEREIGN: NORMAL ESP
+    -- ==========================================
+    local XenoSettings = {
+        BoxColor = Color3.fromRGB(148, 0, 211), 
+        SkeletonColor = Color3.fromRGB(186, 85, 211), 
+        TracerColor = Color3.fromRGB(148, 0, 211), 
+        HealthBarGreen = Color3.fromRGB(0, 255, 100), 
+        HealthBarRed = Color3.fromRGB(255, 40, 40), 
+        Enabled = true,
+        TracersEnabled = true
+    }
+
+    local function createXenoESP(plr)
+        local Box = Drawing.new("Square")
+        Box.Visible = false
+        Box.Color = XenoSettings.BoxColor
+        Box.Thickness = 1.5
+        Box.Filled = false
+
+        local HealthBarBg = Drawing.new("Line")
+        HealthBarBg.Visible = false
+        HealthBarBg.Color = XenoSettings.HealthBarRed
+        HealthBarBg.Thickness = 3
+
+        local HealthBar = Drawing.new("Line")
+        HealthBar.Visible = false
+        HealthBar.Color = XenoSettings.HealthBarGreen
+        HealthBar.Thickness = 3
+
+        local Tracer = Drawing.new("Line")
+        Tracer.Visible = false
+        Tracer.Color = XenoSettings.TracerColor
+        Tracer.Thickness = 1.2
+        Tracer.Transparency = 0.5
+
+        local SkeletonLines = {}
+        for i = 1, 14 do
+            local line = Drawing.new("Line")
+            line.Visible = false
+            line.Color = XenoSettings.SkeletonColor
+            line.Thickness = 1.2
+            table.insert(SkeletonLines, line)
+        end
+
+        local R15_Links = {
+            {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+            {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+            {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+            {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+            {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"}
+        }
+
+        local R6_Links = {
+            {"Head", "Torso"}, {"Torso", "Left Arm"}, {"Torso", "Right Arm"},
+            {"Torso", "Left Leg"}, {"Torso", "Right Leg"}
+        }
+
+        local function update()
+            local connection
+            connection = RunService.RenderStepped:Connect(function()
+                if XenoSettings.Enabled and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 and plr ~= LocalPlayer then
+                    local char = plr.Character
+                    local humRoot = char.HumanoidRootPart
+                    local hum = char.Humanoid
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(humRoot.Position)
+
+                    if onScreen then
+                        local sizeX = 2500 / screenPos.Z
+                        local sizeY = 4000 / screenPos.Z
+                        local boxPos = Vector2.new(screenPos.X - sizeX / 2, screenPos.Y - sizeY / 2)
+
+                        Box.Size = Vector2.new(sizeX, sizeY)
+                        Box.Position = boxPos
+                        Box.Visible = true
+
+                        local healthRatio = hum.Health / hum.MaxHealth
+                        local barHeight = sizeY * healthRatio
+                        local barX = boxPos.X - 6
+
+                        HealthBarBg.From = Vector2.new(barX, boxPos.Y)
+                        HealthBarBg.To = Vector2.new(barX, boxPos.Y + sizeY)
+                        HealthBarBg.Visible = true
+
+                        HealthBar.From = Vector2.new(barX, boxPos.Y + sizeY)
+                        HealthBar.To = Vector2.new(barX, boxPos.Y + sizeY - barHeight)
+                        HealthBar.Visible = true
+
+                        if XenoSettings.TracersEnabled then
+                            Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                            Tracer.To = Vector2.new(screenPos.X, boxPos.Y + sizeY) 
+                            Tracer.Visible = true
+                        else
+                            Tracer.Visible = false
+                        end
+
+                        local links = hum.RigType == Enum.HumanoidRigType.R15 and R15_Links or R6_Links
+
+                        for i = 1, #SkeletonLines do
+                            local line = SkeletonLines[i]
+                            if links[i] then
+                                local part1 = char:FindFirstChild(links[i][1])
+                                local part2 = char:FindFirstChild(links[i][2])
+
+                                if part1 and part2 then
+                                    local p1, vis1 = Camera:WorldToViewportPoint(part1.Position)
+                                    local p2, vis2 = Camera:WorldToViewportPoint(part2.Position)
+
+                                    if vis1 or vis2 then
+                                        line.From = Vector2.new(p1.X, p1.Y)
+                                        line.To = Vector2.new(p2.X, p2.Y)
+                                        line.Visible = true
+                                    else
+                                        line.Visible = false
+                                    end
+                                else
+                                    line.Visible = false
+                                end
+                            else
+                                line.Visible = false
+                            end
+                        end
+                    else
+                        Box.Visible = false
+                        HealthBarBg.Visible = false
+                        HealthBar.Visible = false
+                        Tracer.Visible = false
+                        for _, line in pairs(SkeletonLines) do line.Visible = false end
+                    end
+                else
+                    Box.Visible = false
+                    HealthBarBg.Visible = false
+                    HealthBar.Visible = false
+                    Tracer.Visible = false
+                    for _, line in pairs(SkeletonLines) do line.Visible = false end
+
+                    if not plr.Parent then
+                        connection:Disconnect()
+                        Box:Remove()
+                        HealthBarBg:Remove()
+                        HealthBar:Remove()
+                        Tracer:Remove()
+                        for _, line in pairs(SkeletonLines) do line:Remove() end
+                    end
+                end
+            end)
+        end
+        coroutine.wrap(update)()
+    end
+
+    for _, v in pairs(Players:GetPlayers()) do createXenoESP(v) end
+    Players.PlayerAdded:Connect(function(v) createXenoESP(v) end)
+
+    -- ==========================================
+    -- FOV ÇEMBERİ
+    -- ==========================================
+    local FOVCircle = Drawing.new("Circle")
+    FOVCircle.Thickness = 2
+    FOVCircle.Color = mainThemeColor
+    FOVCircle.Filled = false
+    FOVCircle.Transparency = 0.9
+    FOVCircle.NumSides = 90
+    FOVCircle.Visible = fovVisible
+    FOVCircle.Radius = fovRadius
+
+    -- ==========================================
+    -- YARDIMCI MANTIK & TARGET FINDER
+    -- ==========================================
+    local function getHeadPart(character)
+        if not character then return nil end
+        return character:FindFirstChild("Head") 
+            or character:FindFirstChild("HumanoidRootPart") 
+            or character:FindFirstChild("UpperTorso")
+    end
+
+    local function isVisible(targetCharacter)
+        if not wallCheckActive then return true end
+        local targetPart = getHeadPart(targetCharacter)
+        if not targetPart then return false end
+    
+        local origin = Camera.CFrame.Position
+        local direction = (targetPart.Position - origin)
+    
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterType = filterExclude
+        raycastParams.IgnoreWater = true
+    
+        local ignoreList = {Camera}
+        if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end
+        raycastParams.FilterDescendantsInstances = ignoreList
+    
+        local success, result = pcall(function()
+            return workspace:Raycast(origin, direction, raycastParams)
+        end)
+    
+        if not success or not result then return true end
+        if result.Instance and result.Instance:IsDescendantOf(targetCharacter) then return true end
+        return false
+    end
+
+    local function getEnYakinFOVOyuncu()
+        local enYakin = nil
+        local kisaMesafe = fovRadius
+        local screenCenter = Vector2.new(Mouse.X, Mouse.Y)
+
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                local isAlive = (humanoid == nil) or (humanoid.Health > 0)
+            
+                if isAlive then
+                    local ayniTakimda = false
+                    if teamCheckActive and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
+                        ayniTakimda = true
+                    end
+
+                    if not ayniTakimda then
+                        local targetPart = getHeadPart(player.Character)
+                        if targetPart then
+                            local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+                            if onScreen then
+                                local mouseDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                                if mouseDist < kisaMesafe then
+                                    if isVisible(player.Character) then
+                                        kisaMesafe = mouseDist
+                                        enYakin = player
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return enYakin
+    end
+
+    -- ==========================================
+    -- GÖRÜNMEZLİK (FE INVISIBILITY FIX)
+    -- ==========================================
+    local function toggleFEInvisibility(state)
+        local character = LocalPlayer.Character
+        if not character then return end
+    
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        if state then
+            local oldPos = hrp.CFrame
+            hrp.CFrame = CFrame.new(oldPos.X, oldPos.Y + 50000, oldPos.Z)
+            task.wait(0.1)
+            hrp.Anchored = true
+        else
+            hrp.Anchored = false
+            hrp.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 50000, hrp.Position.Z)
+        end
+    end
+
+    -- ==========================================
+    -- DÖNGÜ & TUŞ DİNLERİ
+    -- ==========================================
+    UIS.InputBegan:Connect(function(input, processed)
+        if processed then return end
+
+        if not bindingAimbotKey and input.KeyCode == aimbotKey then
+            aimbotActive = not aimbotActive
+        end
+    
+        if infJumpActive and input.KeyCode == Enum.KeyCode.Space then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+        end
+
+        if clickTpActive and not bindingTeleportKey and input.KeyCode == clickTpKey then
+            if Mouse.Hit and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(Mouse.Hit.Position + Vector3.new(0, 3, 0))
+            end
+        end
+    end)
+
+    RunService.Stepped:Connect(function()
+        if noclipActive and LocalPlayer.Character then
+            for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end)
+
+    RunService.RenderStepped:Connect(function()
+        FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        FOVCircle.Radius = fovRadius
+        FOVCircle.Color = mainThemeColor
+    
+        FOVCircle.Visible = fovVisible and aimbotActive
+
+        -- GÜVENLİ VE DÜZELTİLMİŞ SPINBOT MANTIĞI
+        if LocalPlayer.Character then
+            local char = LocalPlayer.Character
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local rootJoint = hrp:FindFirstChild("RootJoint") or (char:FindFirstChild("LowerTorso") and char.LowerTorso:FindFirstChild("Root"))
+                if rootJoint then
+                    -- Orijinal duruşu hafızaya al
+                    if not rootJoint:FindFirstChild("OriginalC0") then
+                        local val = Instance.new("CFrameValue")
+                        val.Name = "OriginalC0"
+                        val.Value = rootJoint.C0
+                        val.Parent = rootJoint
+                    end
+
+                    if spinbotActive then
+                        spinAngle = (spinAngle + (spinSpeed * 1.5)) % 360
+                        rootJoint.C0 = rootJoint.OriginalC0.Value * CFrame.Angles(0, math.rad(spinAngle), 0)
+                    elseif rootJoint:FindFirstChild("OriginalC0") then
+                        rootJoint.C0 = rootJoint.OriginalC0.Value
+                    end
+                end
+            end
+        end
+
+        if aimbotActive then
+            local hedef = getEnYakinFOVOyuncu()
+            if hedef and hedef.Character then
+                local targetPart = getHeadPart(hedef.Character)
+                if targetPart then
+                    if aimbotSmoothActive then
+                        Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPart.Position), aimSmoothness)
+                    else
+                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+                    end
+                end
+            end
+        end
+    
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if speedActive then
+                hum.WalkSpeed = customSpeedValue
+            else
+                hum.WalkSpeed = 16
+            end
+        end
+
+        if flyActive and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = LocalPlayer.Character.HumanoidRootPart
+            local moveDir = Vector3.new()
+        
+            if UIS:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + Camera.CFrame.LookVector end
+            if UIS:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - Camera.CFrame.LookVector end
+            if UIS:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - Camera.CFrame.RightVector end
+            if UIS:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + Camera.CFrame.RightVector end
+            if UIS:IsKeyDown(Enum.KeyCode.E) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+            if UIS:IsKeyDown(Enum.KeyCode.Q) then moveDir = moveDir - Vector3.new(0, 1, 0) end
+        
+            if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+            hrp.Velocity = moveDir * flySpeed
+        end
+    end)
+
+    -- ==========================================
+    -- GUI ARAYÜZ SİSTEMİ
+    -- ==========================================
+    local function initUI()
+        local ScreenGui = Instance.new("ScreenGui")
+        ScreenGui.Name = "Xeno_Sovereign_Hub"
+        ScreenGui.ResetOnSpawn = false
+
+        -- Görünürlük garantisi: gethui -> CoreGui -> PlayerGui
+        local function tryMount(target)
+            if not target then return false end
+            local ok = pcall(function() ScreenGui.Parent = target end)
+            return ok and ScreenGui.Parent == target
+        end
+
+        local mounted = false
+        if gethui then
+            local okHui, hui = pcall(gethui)
+            if okHui then mounted = tryMount(hui) end
+        end
+        if not mounted then
+            local okCore, core = pcall(function() return game:GetService("CoreGui") end)
+            if okCore then mounted = tryMount(core) end
+        end
+        if not mounted then
+            ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+        end
+
+        local Main = Instance.new("Frame", ScreenGui)
+        Main.Size = UDim2.new(0, 620, 0, 410)
+        Main.Position = UDim2.new(0.3, 0, 0.2, 0)
+        Main.BackgroundColor3 = Color3.fromRGB(11, 9, 15)
+        Main.BorderSizePixel = 0
+        Main.Active = true
+        Main.ClipsDescendants = true
+    
+        local MainCorner = Instance.new("UICorner", Main)
+        MainCorner.CornerRadius = UDim.new(0, 16)
+
+        local MainStroke = Instance.new("UIStroke", Main)
+        MainStroke.Color = Color3.fromRGB(55, 35, 75)
+        MainStroke.Thickness = 1.8
+
+        local dragging, dragStart, startPos
+        Main.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                dragStart = input.Position
+                startPos = Main.Position
+            end
+        end)
+        Main.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = input.Position - dragStart
+                TweenService:Create(Main, TweenInfo.new(0.08, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+                    Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                }):Play()
+            end
+        end)
+
+        local Header = Instance.new("Frame", Main)
+        Header.Size = UDim2.new(1, 0, 0, 52)
+        Header.BackgroundColor3 = Color3.fromRGB(15, 12, 21)
+        Header.BorderSizePixel = 0
+
+        local Title = Instance.new("TextLabel", Header)
+        Title.Text = "❖ XENO SOVEREIGN HUB <font color=\"#9400d3\">ELITE</font>"
+        Title.RichText = true
+        Title.Font = Enum.Font.GothamBold
+        Title.TextSize = 18
+        Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Title.Position = UDim2.new(0.04, 0, 0, 0)
+        Title.Size = UDim2.new(0.5, 0, 1, 0)
+        Title.TextXAlignment = Enum.TextXAlignment.Left
+        Title.BackgroundTransparency = 1
+
+        local KeyInfo = Instance.new("TextLabel", Header)
+        KeyInfo.Text = "Menü: [ H ] | Aimbot: [ J ]"
+        KeyInfo.Font = Enum.Font.GothamMedium
+        KeyInfo.TextSize = 12
+        KeyInfo.TextColor3 = Color3.fromRGB(150, 140, 170)
+        KeyInfo.Position = UDim2.new(0.65, 0, 0, 0)
+        KeyInfo.Size = UDim2.new(0.31, 0, 1, 0)
+        KeyInfo.TextXAlignment = Enum.TextXAlignment.Right
+        KeyInfo.BackgroundTransparency = 1
+
+        local Sidebar = Instance.new("Frame", Main)
+        Sidebar.Size = UDim2.new(0, 165, 1, -52)
+        Sidebar.Position = UDim2.new(0, 0, 0, 52)
+        Sidebar.BackgroundColor3 = Color3.fromRGB(13, 10, 18)
+        Sidebar.BorderSizePixel = 0
+
+        local Container = Instance.new("Frame", Main)
+        Container.Size = UDim2.new(1, -177, 1, -64)
+        Container.Position = UDim2.new(0, 171, 0, 58)
+        Container.BackgroundTransparency = 1
+
+        local pages = {}
+        local function createPage()
+            local page = Instance.new("ScrollingFrame", Container)
+            page.Size = UDim2.new(1, 0, 1, 0)
+            page.BackgroundTransparency = 1
+            page.BorderSizePixel = 0
+            page.ScrollBarThickness = 3
+            page.ScrollBarImageColor3 = mainThemeColor
+            page.Visible = false
+        
+            local layout = Instance.new("UIListLayout", page)
+            layout.SortOrder = Enum.SortOrder.LayoutOrder
+            layout.Padding = UDim.new(0, 10)
+        
+            layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 14)
+            end)
+        
+            return page
+        end
+
+        local CombatPage = createPage()
+        local VisualPage = createPage()
+        local PlayerPage = createPage()
+        local MovementPage = createPage()
+        local SecretPage = createPage()
+
+        local activePage = nil
+        local function showPage(targetPage)
+            if activePage == targetPage then return end
+            if activePage then
+                local oldPage = activePage
+                TweenService:Create(oldPage, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(0, 15, 0, 0)}):Play()
+                task.delay(0.12, function()
+                    oldPage.Visible = false
+                    oldPage.Position = UDim2.new(0, 0, 0, 0)
+                end)
+            end
+
+            targetPage.Position = UDim2.new(0, -15, 0, 0)
+            targetPage.Visible = true
+            activePage = targetPage
+            TweenService:Create(targetPage, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.new(0, 0, 0, 0)}):Play()
+        end
+
+        local tabButtons = {}
+        local function createTabBtn(name, iconText, targetPage)
+            local btn = Instance.new("TextButton", Sidebar)
+            btn.Size = UDim2.new(0.88, 0, 0, 40)
+            btn.Position = UDim2.new(0.06, 0, 0, #tabButtons * 46 + 12)
+            btn.BackgroundColor3 = Color3.fromRGB(18, 14, 25)
+            btn.Text = "   " .. iconText .. "   " .. name
+            btn.TextColor3 = Color3.fromRGB(150, 140, 165)
+            btn.Font = Enum.Font.GothamMedium
+            btn.TextSize = 13
+            btn.TextXAlignment = Enum.TextXAlignment.Left
+            btn.AutoButtonColor = false
+        
+            local corner = Instance.new("UICorner", btn)
+            corner.CornerRadius = UDim.new(0, 10)
+
+            local stroke = Instance.new("UIStroke", btn)
+            stroke.Color = Color3.fromRGB(30, 24, 40)
+            stroke.Thickness = 1
+
+            btn.MouseButton1Click:Connect(function()
+                for _, b in pairs(tabButtons) do 
+                    TweenService:Create(b, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(18, 14, 25), TextColor3 = Color3.fromRGB(150, 140, 165)}):Play()
+                end
+                TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = mainThemeColor, TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
+                showPage(targetPage)
+            end)
+
+            table.insert(tabButtons, btn)
+            pages[name] = targetPage
+            if #tabButtons == 1 then
+                btn.BackgroundColor3 = mainThemeColor
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                showPage(targetPage)
+            end
+        end
+
+        createTabBtn("Combat", "🎯", CombatPage)
+        createTabBtn("Visual", "👁️", VisualPage)
+        createTabBtn("Player", "⚡", PlayerPage)
+        createTabBtn("Movement", "🕊️", MovementPage)
+        createTabBtn("Gizli", "🕵️", SecretPage)
+
+        local function createToggle(parent, titleText, defaultState, callback)
+            local frame = Instance.new("Frame", parent)
+            frame.Size = UDim2.new(1, -8, 0, 40)
+            frame.BackgroundColor3 = Color3.fromRGB(17, 13, 24)
+        
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+            local stroke = Instance.new("UIStroke", frame)
+            stroke.Color = Color3.fromRGB(28, 22, 38)
+            stroke.Thickness = 1
+
+            local label = Instance.new("TextLabel", frame)
+            label.Text = "   " .. titleText
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 12
+            label.TextColor3 = Color3.fromRGB(225, 225, 230)
+            label.Size = UDim2.new(0.7, 0, 1, 0)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.BackgroundTransparency = 1
+
+            local switchBg = Instance.new("TextButton", frame)
+            switchBg.Size = UDim2.new(0, 46, 0, 24)
+            switchBg.Position = UDim2.new(1, -54, 0.5, -12)
+            switchBg.Text = ""
+            switchBg.AutoButtonColor = false
+            Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
+
+            local circle = Instance.new("Frame", switchBg)
+            circle.Size = UDim2.new(0, 18, 0, 18)
+            circle.Position = UDim2.new(0, 3, 0.5, -9)
+            circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
+
+            local state = defaultState
+            local function updateSwitch()
+                if state then
+                    TweenService:Create(switchBg, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {BackgroundColor3 = mainThemeColor}):Play()
+                    TweenService:Create(circle, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.new(1, -21, 0.5, -9)}):Play()
+                else
+                    TweenService:Create(switchBg, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(35, 28, 48)}):Play()
+                    TweenService:Create(circle, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = UDim2.new(0, 3, 0.5, -9)}):Play()
+                end
+            end
+
+            switchBg.MouseButton1Click:Connect(function()
+                state = not state
+                updateSwitch()
+                callback(state)
+            end)
+
+            updateSwitch()
+        end
+
+        local function createAdjuster(parent, titleText, startVal, minVal, maxVal, step, callback)
+            local frame = Instance.new("Frame", parent)
+            frame.Size = UDim2.new(1, -8, 0, 40)
+            frame.BackgroundColor3 = Color3.fromRGB(17, 13, 24)
+        
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+            local stroke = Instance.new("UIStroke", frame)
+            stroke.Color = Color3.fromRGB(28, 22, 38)
+            stroke.Thickness = 1
+
+            local label = Instance.new("TextLabel", frame)
+            label.Text = "   " .. titleText .. ": " .. tostring(startVal)
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 12
+            label.TextColor3 = Color3.fromRGB(225, 225, 230)
+            label.Size = UDim2.new(0.6, 0, 1, 0)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.BackgroundTransparency = 1
+
+            local val = startVal
+            local minusBtn = Instance.new("TextButton", frame)
+            minusBtn.Size = UDim2.new(0, 28, 0, 26)
+            minusBtn.Position = UDim2.new(1, -66, 0.5, -13)
+            minusBtn.Text = "-"
+            minusBtn.Font = Enum.Font.GothamBold
+            minusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            minusBtn.BackgroundColor3 = Color3.fromRGB(35, 28, 48)
+            minusBtn.AutoButtonColor = false
+            Instance.new("UICorner", minusBtn).CornerRadius = UDim.new(0, 6)
+
+            local plusBtn = Instance.new("TextButton", frame)
+            plusBtn.Size = UDim2.new(0, 28, 0, 26)
+            plusBtn.Position = UDim2.new(1, -34, 0.5, -13)
+            plusBtn.Text = "+"
+            plusBtn.Font = Enum.Font.GothamBold
+            plusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            plusBtn.BackgroundColor3 = mainThemeColor
+            plusBtn.AutoButtonColor = false
+            Instance.new("UICorner", plusBtn).CornerRadius = UDim.new(0, 6)
+
+            minusBtn.MouseButton1Click:Connect(function()
+                val = math.max(minVal, val - step)
+                label.Text = "   " .. titleText .. ": " .. tostring(val)
+                callback(val)
+            end)
+
+            plusBtn.MouseButton1Click:Connect(function()
+                val = math.min(maxVal, val + step)
+                label.Text = "   " .. titleText .. ": " .. tostring(val)
+                callback(val)
+            end)
+        end
+
+        local function createKeybinder(parent, titleText, defaultKey, callback)
+            local frame = Instance.new("Frame", parent)
+            frame.Size = UDim2.new(1, -8, 0, 40)
+            frame.BackgroundColor3 = Color3.fromRGB(17, 13, 24)
+        
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+            local stroke = Instance.new("UIStroke", frame)
+            stroke.Color = Color3.fromRGB(28, 22, 38)
+            stroke.Thickness = 1
+
+            local label = Instance.new("TextLabel", frame)
+            label.Text = "   " .. titleText
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 12
+            label.TextColor3 = Color3.fromRGB(225, 225, 230)
+            label.Size = UDim2.new(0.6, 0, 1, 0)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.BackgroundTransparency = 1
+
+            local keyBtn = Instance.new("TextButton", frame)
+            keyBtn.Size = UDim2.new(0, 75, 0, 26)
+            keyBtn.Position = UDim2.new(1, -83, 0.5, -13)
+            keyBtn.Text = "[" .. defaultKey.Name .. "]"
+            keyBtn.Font = Enum.Font.GothamBold
+            keyBtn.TextSize = 11
+            keyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            keyBtn.BackgroundColor3 = Color3.fromRGB(35, 28, 48)
+            keyBtn.AutoButtonColor = false
+            Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 6)
+
+            keyBtn.MouseButton1Click:Connect(function()
+                bindingTeleportKey = true
+                keyBtn.Text = "[...]"
+                keyBtn.BackgroundColor3 = mainThemeColor
+            
+                local connection
+                connection = UIS.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.Keyboard then
+                        clickTpKey = input.KeyCode
+                        keyBtn.Text = "[" .. input.KeyCode.Name .. "]"
+                        keyBtn.BackgroundColor3 = Color3.fromRGB(35, 28, 48)
+                        bindingTeleportKey = false
+                        connection:Disconnect()
+                        callback(input.KeyCode)
+                    end
+                end)
+            end)
+        end
+
+        local function createAimbotKeybinder(parent, titleText, defaultKey, callback)
+            local frame = Instance.new("Frame", parent)
+            frame.Size = UDim2.new(1, -8, 0, 40)
+            frame.BackgroundColor3 = Color3.fromRGB(17, 13, 24)
+
+            Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+            local stroke = Instance.new("UIStroke", frame)
+            stroke.Color = Color3.fromRGB(28, 22, 38)
+            stroke.Thickness = 1
+
+            local label = Instance.new("TextLabel", frame)
+            label.Text = "   " .. titleText
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 12
+            label.TextColor3 = Color3.fromRGB(225, 225, 230)
+            label.Size = UDim2.new(0.6, 0, 1, 0)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.BackgroundTransparency = 1
+
+            local keyBtn = Instance.new("TextButton", frame)
+            keyBtn.Size = UDim2.new(0, 75, 0, 26)
+            keyBtn.Position = UDim2.new(1, -83, 0.5, -13)
+            keyBtn.Text = "[" .. defaultKey.Name .. "]"
+            keyBtn.Font = Enum.Font.GothamBold
+            keyBtn.TextSize = 11
+            keyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            keyBtn.BackgroundColor3 = Color3.fromRGB(35, 28, 48)
+            keyBtn.AutoButtonColor = false
+            Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 6)
+
+            keyBtn.MouseButton1Click:Connect(function()
+                bindingAimbotKey = true
+                keyBtn.Text = "[...]"
+                keyBtn.BackgroundColor3 = mainThemeColor
+
+                local connection
+                connection = UIS.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+                        aimbotKey = input.KeyCode
+                        keyBtn.Text = "[" .. input.KeyCode.Name .. "]"
+                        keyBtn.BackgroundColor3 = Color3.fromRGB(35, 28, 48)
+                        bindingAimbotKey = false
+                        connection:Disconnect()
+                        callback(input.KeyCode)
+                    end
+                end)
+            end)
+        end
+
+        -- COMBAT TAB
+        createToggle(CombatPage, "Aimbot", aimbotActive, function(v) aimbotActive = v end)
+        createAimbotKeybinder(CombatPage, "Aimbot Tuşu", aimbotKey, function(k) aimbotKey = k end)
+        createToggle(CombatPage, "Aimbot Yumuşatma (Smooth)", aimbotSmoothActive, function(v) aimbotSmoothActive = v end)
+        createAdjuster(CombatPage, "Yumuşatma Değeri", 5, 1, 10, 1, function(v) aimSmoothness = v / 10 end)
+        createToggle(CombatPage, "Takım Kontrolü", teamCheckActive, function(v) teamCheckActive = v end)
+        createToggle(CombatPage, "Duvar Kontrolü", wallCheckActive, function(v) wallCheckActive = v end)
+        createToggle(CombatPage, "FOV Çemberini Göster", fovVisible, function(v) fovVisible = v end)
+        createAdjuster(CombatPage, "FOV Boyutu", fovRadius, 50, 600, 10, function(v) fovRadius = v end)
+        createToggle(CombatPage, "Mevlana (Spinbot)", spinbotActive, function(v) spinbotActive = v end)
+        createAdjuster(CombatPage, "Mevlana Hızı", spinSpeed, 10, 200, 10, function(v) spinSpeed = v end)
+
+        -- VISUAL TAB
+        createToggle(VisualPage, "XENO ESP Aktif", XenoSettings.Enabled, function(v) XenoSettings.Enabled = v end)
+        createToggle(VisualPage, "XENO Tracers (Çizgiler)", XenoSettings.TracersEnabled, function(v) XenoSettings.TracersEnabled = v end)
+
+        -- PLAYER TAB 
+        createToggle(PlayerPage, "Hız Artışı (Speed)", speedActive, function(v) speedActive = v end)
+        createAdjuster(PlayerPage, "Yürüme Hızı", customSpeedValue, 16, 250, 5, function(v) customSpeedValue = v end)
+
+        -- MOVEMENT TAB 
+        createToggle(MovementPage, "Işınlanma (Teleport)", clickTpActive, function(v) clickTpActive = v end)
+        createKeybinder(MovementPage, "Teleport Tuşu", clickTpKey, function(k) clickTpKey = k end)
+        createToggle(MovementPage, "Sınırsız Zıplama", infJumpActive, function(v) infJumpActive = v end)
+        createToggle(MovementPage, "Noclip (Duvar Geç)", noclipActive, function(v) noclipActive = v end)
+        createToggle(MovementPage, "Görünmezlik (FE Invisibility)", invisibleActive, function(v) 
+            invisibleActive = v 
+            toggleFEInvisibility(v)
+        end)
+        createToggle(MovementPage, "Uçma (Fly)", flyActive, function(v) flyActive = v end)
+        createAdjuster(MovementPage, "Uçma Hızı", flySpeed, 10, 300, 10, function(v) flySpeed = v end)
+    
+        -- GİZLİ TAB 
+        createToggle(SecretPage, "Gizli İşaretleyici (!)", hiddenEspActive, function(v) hiddenEspActive = v end)
+
+        UIS.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if input.KeyCode == Enum.KeyCode.H then
+                if Main.Visible then
+                    TweenService:Create(Main, TweenInfo.new(0.15, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Size = UDim2.new(0, 620, 0, 0)}):Play()
+                    task.delay(0.15, function() Main.Visible = false end)
+                else
+                    Main.Size = UDim2.new(0, 620, 0, 0)
+                    Main.Visible = true
+                    TweenService:Create(Main, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 620, 0, 410)}):Play()
+                end
+            end
+        end)
+    end
+
+    task.spawn(initUI)
+end
+
+openAccessPanel()
