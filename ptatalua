@@ -1,10 +1,14 @@
 --[[
-    Yazılım Erişim ve Giriş Kontrol Paneli
+    Yazılım Erişim ve Lisans Kontrol Paneli
     - Harici kütüphane yok: SHA-256 saf Luau (bit32) ile yazılmıştır.
-    - Şifrelerin düz metni kodda tutulmaz, yalnızca SHA-256 özetleri saklanır.
-    - Her çalıştırmada 3 şifreden biri rastgele seçilir ve kullanıcıdan istenir.
-    - Doğru şifrede panel Destroy edilir ve StartMainScript() çağrılır.
-    - Menü kodunun tamamı StartMainScript() içindedir; yanlış/eksik şifrede hiçbir kısmı çalışmaz.
+    - Anahtarların düz metni kodda tutulmaz, yalnızca SHA-256 özetleri saklanır.
+    - 120 anahtar: 30 Haftalık (7 gün) / 30 Aylık (30 gün) / 30 Yıllık (365 gün) / 30 Lifetime.
+    - Süre, anahtarın İLK girildiği andan itibaren başlar. Süre dolunca anahtar yanar,
+      yeni anahtar girmek gerekir. Lifetime anahtarın süresi yoktur.
+    - Geçerli lisans varken script her çalıştığında panel açılmadan doğrudan başlar.
+    - Doğru anahtarda panel Destroy edilir ve StartMainScript() çağrılır.
+    - Menü kodunun tamamı StartMainScript() içindedir; yanlış/eksik/süresi dolmuş
+      anahtarda hiçbir kısmı çalışmaz.
 ]]
 
 local Players = game:GetService("Players")
@@ -16,13 +20,167 @@ end
 local LocalPlayer = Players.LocalPlayer
 
 -- ==========================================================
--- 1) ŞİFRE ÖZETLERİ (SHA-256, geri döndürülemez)
+-- 1) LİSANS ANAHTAR ÖZETLERİ (SHA-256, geri döndürülemez)
 -- ==========================================================
-local PASSWORD_HASHES = {
-    "e992e3d7285e69eaf76fc3f8a3926c6c97f5c639b7d1f0c34c375a8dc673d4ea", -- Şifre 1
-    "a4295d5e37da8581d2eaf8e5f6d328f31554d68d8f0b7c729298c89333e67f15", -- Şifre 2
-    "d789b230a7c23eef0bf126048199214ef89793e391e5fad2d581799f8d56e365", -- Şifre 3
+-- Anahtar hangi tablodaysa lisans türü odur. Düz metin anahtar kodda yoktur.
+local LICENSE_TIERS = {
+    {
+        id = "WEEK",
+        label = "Haftalık",
+        seconds = 7 * 86400, -- ilk girişten itibaren 7 gün
+        hashes = {
+            "f306cdbacd283725121c3ef0f0f69b2d187263d40a15b6ef2a71158edb9530db",
+            "8272539a934a94b061385cd8eb9303543d74f98a003d852b3ff9b2262709057c",
+            "fdb9234d68f467f3fde70000259ba5a53fb6a45cd1fe48e8b631a458b3b22bd8",
+            "9365dcea65c736e01d51d17b993d9a55e976833b31530b23d7c246e7051543c6",
+            "55567929eb3bf6a1bf00d7d9417eea27bd01843d4085b5d588eed408d7b49888",
+            "fed4b73b05beaec9a63f6ac93e7c5c9e608683df9c8af3d068a1730b0a9e10da",
+            "e52e7caa4a074a7ffb8ce6d7b53c3feaacd1b318682cb39137678f5280d0742c",
+            "877f354f80f875f006529b75b5ca13b13b376b0cb3d996268396f421d3d5b606",
+            "8f8c0d9e3c88417cb4e0aac5d1785b4fa44f2316db5eff088e4d785fe273721e",
+            "9e6e067669f787e24534b726264575de23139482b3a0c7138225a206c2f9b268",
+            "1cffd615e1ea7099757ddf9c619dcf6e0987c068bc2910cd343c5e48cd99dca7",
+            "6d0bee3681d9c9ce7591d33a4461e08de3705faa6e5fb6e9ee1d1b7de7d18411",
+            "bddca0275454b263c8994d9a58efd0bc06fd90a8a5f59992eaa036f82dbc1944",
+            "826d330f4e85b61718ab40e71d19868682692a0bdf39597e2995b8b0a6b9cf44",
+            "1c4b8dc9ed13f35d984f3883faf7eea15776f17f9a380ddedbc3cade88220329",
+            "79e20a6247fe79584c521247da1a705051ba99348775ba4dd5400c0b0c8e5ec9",
+            "ce61a48231a1a51c5aa747cc994b3ff4695b53a0961a753ff06e9c386856cf9b",
+            "4f01cdfe0c03e072f796de8ac2528800535ab67dfe0988f695dfece5a28ae5eb",
+            "e1dfe6c90f725f30c4565de3404a07964ef181a9c1804ce8370134b95ef78448",
+            "d0c53522aac3feb6a9b34e01356fd1f6ea0fb407e823c5a0833ca234646b5322",
+            "0591ef9994e8a535f68fe93ae5ddcb0a0266629a5dc55c27ff64a6e55b83b2aa",
+            "25ee676b3133f7ed536b0fe5ce83480805056fe02d815a8b766e3a4b53d84ccd",
+            "1797f6073a103daa66f5ea9e2819b71f5ed81d5908befc2d24fac2704e8f5e13",
+            "5bf74311ae44675e05f69eb66af076d8edfa71a993e507fd217827190c49a6da",
+            "f6225b13942071e717b09a54262af910c253cb7ce0b492b792a1ec3791054450",
+            "bd0f9b8bb502ded5b82f825ddff795cc591b5319501f9e30ab63ec47629153c9",
+            "974371ab6b63206d92f1933edbb08f5eb6a0b0a8b5e38cd3cd7bd6a9493e7aad",
+            "37553710b548c771f0d43f26cae5198b1ae61e938cdd622a2a609b80a1714664",
+            "5d3551b793d39988c5e546827380408706fe2f62ec786dd30cff41f1f89fc547",
+            "55e663894ba15adcd5b3597b6db4406c707472f6f2e3967ee250406d51461d6e",
+        },
+    },
+    {
+        id = "MONTH",
+        label = "Aylık",
+        seconds = 30 * 86400, -- ilk girişten itibaren 30 gün
+        hashes = {
+            "7f61d0970f14296f62b69290a2ab73d1ef9836105ff6d5b63d3287226fc32c61",
+            "36bb49c314facf178b472dd47b70ed676e46cd12546f6e1219ff5a74e3fab9a1",
+            "69a9264fde833c267f43ba903c1737001331dafd9e233ce3293e79b120384201",
+            "5879b96d3d54ec805efeb788ea46036d1a4064a6a668995ae7c5729fbc8eaba2",
+            "7fb831c3c104946dce32b694b0ebaff9add2799035df45149d3f90a15e5e3ad0",
+            "4b14fa89f106e4e902713bbb7893a180d910213ebf86453710775631e67393d2",
+            "ee84825e37dbd0aa0e8d574b0e73427fb24633f4f4bf9026eecd2d3700326aab",
+            "d3388397e9513c8e2ca4c1fe02ace719deef5a183439e0b4f087b970760d2d39",
+            "524df0226dbf06c62a6510cd3535a83549f899c7294bcc4e0dc28b69ddc580d2",
+            "1674c355d511e004511befd539b92e0f64394623a9e4860e142fa060f52176c1",
+            "9e6be5558f537c01369a78d9e82b3b1740999b92173a09ef3a234d7abb25b330",
+            "d86498aef0cd72a7029c853c0db74c927f640248f26c2d3a50581ec64ebd86f6",
+            "7052d99c33ddeb5cd2e606be39416b0f32401536fe03db590f28f96741046ee6",
+            "b7820984d5695312150e794c63e2e8042ae852b3e4d20655b58d7472944d8e61",
+            "8c7d0b685b8790e04228ea78affebd43cbda729c552f6695523e05a1277958f7",
+            "1c933bbf6e6cb1c685f4a88147e1b82c59ebd66a961881dd5a340b720cb49acf",
+            "ec3a462b93a205cc17648163eb240018e75aa4bb1d2b4a7b44ab2f0bc3d5aaba",
+            "68d123c73bf6a7e8b9a63cb1d8a089b6e4bb6d250c4694716ccc3f393b81021a",
+            "d3ef154d7d4c85f224e4d5e2358415cfb904a2e117845e86add793079dde058b",
+            "c938cf5ba376f5a3c894046b702ba3639f82b9adda38447203beba0b009412e3",
+            "e2ab8e75e947793998b3fee1a851133853dbede0929b498578328ceaf6d4d6dd",
+            "662359dc5cbc46de9af89ee5da2df7c0994c80609258f041515c01c4761831bd",
+            "ad292f7d9680680d4da6b95408b3778848ae1b8dd30fe2bc7ba73cbdf155b020",
+            "777a21422348714d9c2339decc44bc4257cc5bd8f6b79f80f8ef874cad145c63",
+            "c54c5e5f60883371e446e314b084c3d53b5f99c3a54580295bbe7be174241315",
+            "64051751cab225f08291536932296b5f22afcda4008bc81e51252141791412ff",
+            "e3056bde4cb2bc879d0db377637f0539f067cba0b8f4632728dbcd58636b5eef",
+            "56cb4ccce5b3a461b6bec1872e8fc003ed3f178dfb551bc2619ec61af94c17de",
+            "f0a689f2faa4a4c392a565a14a54b3391701381359a8ca12bc7e9edf00ec4dc7",
+            "ccbcbeeae8c91b5eb37571c45b6bd90fe0951da5bcc9a4c5d54a668e8eda4f5a",
+        },
+    },
+    {
+        id = "YEAR",
+        label = "Yıllık",
+        seconds = 365 * 86400, -- ilk girişten itibaren 365 gün
+        hashes = {
+            "7008f00b9888377ae41d982bdc9b9f7308238f4d94c69032e24438a39f0ef204",
+            "00c54d802bed3f5b241e3a146b7f6b51d91861c6c4e826a023b8194d5fbe2230",
+            "897d0a28814056012255980c25d63a33bc804a13a81519c444560e0128ab8356",
+            "ec18bd40a449e36234e9e6887d1201dac2bfc345b4ce410345996d00a91332be",
+            "7ac51644fdb561f81d269ebca6fa4dd59a0450ee044daa641e8683d36e26884b",
+            "6eb53c6b9f1a1b99b6c52f92903b08d1b4e18118240648ab138ad72bca9207da",
+            "9b5f0910012c987fc839ee8ee7f4645b72c84a09d91fa0d982bd3eeecf97037a",
+            "bb7edfe1f72e5df89551b31b86b34f13b60a5ff28e78da1c6d5094504ca926db",
+            "36ee7414c5753b9bab9af5a19b51a88fe9ae895afe2a3e4845051ed76dd4229e",
+            "7bc742538894fe800bb19a840c1dcace2f721e2f5c7062ed6ffccb81f1a92f1f",
+            "24deddc277a52a49ef321e44157e93d6ce8e3fe0711746b4aa58abf6ee8f7cf0",
+            "8cfe308311b737bf77ab0e144fe6d55192eae2c346700587ae52fe6ae1d7a19a",
+            "36f6ca03f86a5fd010f92582fe90c38bd0d1e19af1fdd0c643927584aed551fb",
+            "016496bbfb3a28f52feaae29195d54f8207cb5ff03511b0820e5ce9fe0c155c8",
+            "2e114f9c5159fa2e6ad89ebb96b37c7789693e1a65f7f670c533ee9902f9021f",
+            "15f0a0ecf5ca1806260710e155ed587263ad5f62babcecb7bcaf02f25b714a7b",
+            "a357eb8a091a1b35a6902f5a6372fc92f3f33cf5ff0517fc0bf5462789ff224a",
+            "c7796274f6519a360107c8e0b7fce3d08c145921a8ca287d659daaa1b35e3dca",
+            "a730a67ab8a6d41a9b439e5597c0640a1cc3727ca33cb875fca05d6b1799b1d0",
+            "75b05fa1fa47e2a70a7ffbcf7d95f7cd5cde54aef42bccb84eae29a2ff617f3b",
+            "b41e7ae34f4f0eec35699b5e2a1cd721a8c1dfd8dad8e1a0cad5779e80f206da",
+            "59028cead9acb730f9c85690eff7621cff38869fc84f24dde7298093ac3e46fe",
+            "547e690f8212516bdc4955f817f587bee11aea8869903bf8780a92f5b97be7d4",
+            "ffc4da7460e42b4761fc777ddb80753078843a80c0821ec515425d3eaa96eb6d",
+            "484246b97662f97ee6a876befb8edc28ad1d08ec878425f57805f09173fcf1da",
+            "8410f7752f9663e5a1a803afe05a342d6e4fb3e8b38f4181c6a13b21b7b18e4b",
+            "4ac97175ecfebe9da969098bc4a5eb8b9f29490b2d9afd476cc289d17a5c85af",
+            "b3e28ec02da766621ac8a07cf995661a1220477d63dfd1ea029cdc29bb03de80",
+            "ddc5cd80b4e679d0f93ca1394efa998dc0517bbda201d86e09868df4060904bf",
+            "201cdc5003f31f4f5e59aa0a0a2732de8679a5e473b0f8a5013a80354ab0d4ef",
+        },
+    },
+    {
+        id = "LIFE",
+        label = "Lifetime",
+        seconds = nil, -- süresiz
+        hashes = {
+            "ecb106e49c0ddbc9d25e5a5d40923d615268ec6fb6b52e00134d6301d1d2ae03",
+            "3c633570d02243dc95bd20cdc14d55478307acd23237f28295750983778bddc8",
+            "70ab31fb79246712786b312917989448f2a26680d400289936249ff94fa40e31",
+            "b92c2aea134485b1526f0518b7d75b1be8a0a40a47c4209d4caf1c2c49f1c4c7",
+            "f903bc0c7a968a412344e2dc128a2ae961925a4ceb2b9d6ea48bb1d93c16e353",
+            "275d71a306ef8beba1dccae20de8e52629c148d8b8b01bf58c65cdf24d09d134",
+            "c47724c72ab66e3117dda70f5eca55876bf6b984cc08a19dffd73f27237dadbb",
+            "464141598745b118c5ec44a8444f0fdf475be197903969341bdf7507f62cae2b",
+            "4b70af933380713e3cd5f554088f98533e1221901209576dba46fed6f477c84f",
+            "47494f1311026942f94442ceffa00a156c89086d6fc64c5a15848af1725dc0eb",
+            "a2ed9e2ead685f3380e382a09a3e260c90aeb19892ff62779c55e88d65e0d9f1",
+            "7d562ca382e17e5244b83a4f6ca646c8090d8a1767dcf29facd2a23f222202dc",
+            "df8b6981e57e46936ebeffca5aca5015701753bb1fd7b99f6b235e7d3919d2ae",
+            "adbc34bdcc03a529fd1a7d2e615ec08fac7279f5cfa3d3d860347ec3232c9a26",
+            "1eb23a3c0b9f896ce4f07a3ffef2d0a48f0624d6298fed21d696c4996db95e42",
+            "b8d33d7a2f097d5354140ea8e802823114750a32a2f5f29dcdc9ea23b31ab99f",
+            "d9f21a814efb33eccf6d57350983beed33a0ceb64627b633e7135d9c92385bed",
+            "c3f728ef92347f5c260d50a3b4be1da80bafb27ad083e9e04f702243ae5e0f11",
+            "9c24171dbb6dd6e6166f89856a9ef610dfbed5df27e17942007f2c570a2edc27",
+            "0c69b52373be0f7f0e2e1aad8857122dc6eb47932fd6416756afb26ff9dcf7fd",
+            "6702fb7593aabf99b3408d8e8f599a7e61a39e519a18e134e133d5657b345586",
+            "3135d1b2c2b76d7cb337e61e961186937b743d19a9133241d9a75a542c21f5e4",
+            "4b1f1de246412d7b7a85c044cdd2ed348fc90d2955a18ed98ba68c7e3424e304",
+            "3e0b56d5f0b029b45bff39e15800b916ac6235430e9c78cf34fa029885ce69eb",
+            "cc4f82f38913f663e569d8edc68d0b5de569d90db95000f6cc7cfbd673d18a4f",
+            "4a0ded83346c0afb77bc542dea2169162db6a513ad0d0ae4e8af4dd49aad617c",
+            "4d0c2100a00211a2e60f59384da56e7cac09542a569345b4ff1df42bda030521",
+            "446c0ddbb0b34688d93b3528c3be25bb5c52d74a5c76f68a7775c70f6d7ac158",
+            "aeaf12c68fecbdae5c525d5c56ca5d36af80ea38893b41a164cab732f802ff8f",
+            "1868aca4ebd41b607af1c689258cf4e9b9920bfb59573d9d2088f6407531a6d4",
+        },
+    },
 }
+
+local TIER_BY_ID, HASH_TO_TIER = {}, {}
+for _, tier in ipairs(LICENSE_TIERS) do
+    TIER_BY_ID[tier.id] = tier
+    for _, hash in ipairs(tier.hashes) do
+        HASH_TO_TIER[hash] = tier
+    end
+end
 
 local MAX_ATTEMPTS = 5
 local LOCK_SECONDS = 8
@@ -121,6 +279,188 @@ end
 -- [[SHA256_END]]
 
 -- ==========================================================
+-- 2b) LİSANS DEPOSU (süre takibi)
+-- ==========================================================
+local LICENSE_FILE = "XenoSovereign_License.dat"
+local MEMORY_KEY = "__XenoSovereign_License"
+local SIGNATURE_SALT = "fd33c2e967df944ef702437a9aaafcb6"
+local CLOCK_TOLERANCE = 600 -- sistem saati geri alınmış sayılması için tolerans (sn)
+
+local hasFileApi = type(readfile) == "function"
+    and type(writefile) == "function"
+    and type(isfile) == "function"
+
+-- Büyük/küçük harf, tire ve boşluk fark etmez
+local function canonicalizeKey(text)
+    return (string.gsub(string.upper(text or ""), "[^%w]", ""))
+end
+
+local function serializeState(state)
+    local lines = { "v=1" }
+    local a = state.active
+    if a then
+        lines[#lines + 1] = "tier=" .. a.tier
+        lines[#lines + 1] = "key=" .. a.key
+        lines[#lines + 1] = "activated=" .. a.activated
+        lines[#lines + 1] = "expires=" .. (a.expires or 0)
+    end
+    lines[#lines + 1] = "seen=" .. state.seen
+    local burned = {}
+    for hash in pairs(state.burned) do
+        burned[#burned + 1] = hash
+    end
+    table.sort(burned)
+    for _, hash in ipairs(burned) do
+        lines[#lines + 1] = "burned=" .. hash
+    end
+    local body = table.concat(lines, "\n")
+    return body .. "\nsig=" .. sha256(SIGNATURE_SALT .. body)
+end
+
+local function parseState(text)
+    local body, sig = string.match(text, "^(.*)\nsig=(%x+)%s*$")
+    if not body or sha256(SIGNATURE_SALT .. body) ~= sig then
+        return nil -- bozuk ya da elle değiştirilmiş kayıt
+    end
+    local state = { burned = {}, seen = 0 }
+    local a = {}
+    for line in string.gmatch(body, "[^\n]+") do
+        local k, v = string.match(line, "^(%w+)=(.*)$")
+        if k == "tier" then
+            a.tier = v
+        elseif k == "key" then
+            a.key = v
+        elseif k == "activated" then
+            a.activated = tonumber(v)
+        elseif k == "expires" then
+            a.expires = tonumber(v)
+        elseif k == "seen" then
+            state.seen = tonumber(v) or 0
+        elseif k == "burned" then
+            state.burned[v] = true
+        end
+    end
+    if a.tier and a.key and a.activated and a.expires ~= nil then
+        if a.expires == 0 then
+            a.expires = nil -- lifetime
+        end
+        state.active = a
+    end
+    return state
+end
+
+local function loadState()
+    local candidates = {}
+    if hasFileApi then
+        local okExists, exists = pcall(isfile, LICENSE_FILE)
+        if okExists and exists then
+            local okRead, content = pcall(readfile, LICENSE_FILE)
+            if okRead then
+                candidates[#candidates + 1] = content
+            end
+        end
+    end
+    candidates[#candidates + 1] = _G[MEMORY_KEY] -- oturum içi yedek
+    for _, text in ipairs(candidates) do
+        if type(text) == "string" then
+            local state = parseState(text)
+            if state then
+                return state
+            end
+        end
+    end
+    return { burned = {}, seen = 0 }
+end
+
+local function saveState(state)
+    local text = serializeState(state)
+    _G[MEMORY_KEY] = text
+    if hasFileApi then
+        pcall(writefile, LICENSE_FILE, text)
+    end
+end
+
+-- Kayıtlı lisansı denetler. Dönüş: "none" | "ok" | "expired", mesaj
+local function checkSavedLicense(state)
+    local a = state.active
+    if not a then
+        return "none"
+    end
+
+    local tier = TIER_BY_ID[a.tier]
+    local valid = tier ~= nil and HASH_TO_TIER[a.key] == tier
+    if valid then
+        if tier.seconds then
+            valid = a.expires == a.activated + tier.seconds
+        else
+            valid = a.expires == nil
+        end
+    end
+    if not valid then
+        state.active = nil
+        saveState(state)
+        return "none"
+    end
+
+    local now = os.time()
+    if tier.seconds then
+        local reason
+        if now + CLOCK_TOLERANCE < state.seen then
+            reason = "Sistem saati geri alınmış. Yeni bir anahtar girin."
+        elseif now >= a.expires then
+            reason = "Lisansınızın süresi doldu. Yeni bir anahtar girin."
+        end
+        if reason then
+            state.burned[a.key] = true -- süresi dolan anahtar bir daha kullanılamaz
+            state.active = nil
+            saveState(state)
+            return "expired", reason
+        end
+    end
+
+    state.seen = math.max(state.seen, now)
+    saveState(state)
+    return "ok"
+end
+
+-- Anahtarı etkinleştirir. Dönüş: true | false, "invalid" / "used"
+local function redeemKey(state, canonicalKey)
+    local keyHash = sha256(canonicalKey)
+    local tier = HASH_TO_TIER[keyHash]
+    if not tier then
+        return false, "invalid"
+    end
+    if state.burned[keyHash] then
+        return false, "used"
+    end
+
+    local now = os.time()
+    state.active = {
+        tier = tier.id,
+        key = keyHash,
+        activated = now,
+        expires = tier.seconds and (now + tier.seconds) or nil,
+    }
+    state.seen = math.max(state.seen, now)
+    saveState(state)
+    return true, tier
+end
+
+local function describeLicense(a)
+    local tier = TIER_BY_ID[a.tier]
+    if not a.expires then
+        return tier.label .. " (süresiz)"
+    end
+    local remain = math.max(0, a.expires - os.time())
+    return string.format(
+        "%s - %d gün %d saat kaldı",
+        tier.label,
+        math.floor(remain / 86400),
+        math.floor((remain % 86400) / 3600)
+    )
+end
+
+-- ==========================================================
 -- 3) ANA FONKSİYON (aşağıda tanımlanır)
 -- ==========================================================
 local StartMainScript
@@ -210,10 +550,8 @@ local function makeLabel(parent, text, font, size, color, height, order)
     return label
 end
 
-local function openAccessPanel()
+local function openAccessPanel(notice, licenseState)
     removeOldPanels()
-
-    local expectedIndex = Random.new():NextInteger(1, #PASSWORD_HASHES)
 
     local gui = Instance.new("ScreenGui")
     gui.Name = GUI_NAME
@@ -265,7 +603,8 @@ local function openAccessPanel()
     layout.Parent = content
 
     makeLabel(content, "Yazılım Erişim Paneli", Enum.Font.GothamBold, 21, THEME.Text, 28, 1)
-    makeLabel(content, "Devam etmek için kimlik doğrulaması gerekli", Enum.Font.Gotham, 13, THEME.Muted, 18, 2)
+    makeLabel(content, notice or "Devam etmek için lisans anahtarınızı girin", Enum.Font.Gotham, 13,
+        notice and THEME.Error or THEME.Muted, 18, 2)
 
     -- İstenen şifre indeksi
     local pill = Instance.new("Frame")
@@ -283,7 +622,7 @@ local function openAccessPanel()
     pillText.BackgroundTransparency = 1
     pillText.Size = UDim2.fromScale(1, 1)
     pillText.Font = Enum.Font.GothamBold
-    pillText.Text = ("Lütfen %d. şifreyi girin"):format(expectedIndex)
+    pillText.Text = "Lisans Anahtarı"
     pillText.TextSize = 13
     pillText.TextColor3 = THEME.Text
     pillText.Parent = pill
@@ -297,7 +636,7 @@ local function openAccessPanel()
     input.Font = Enum.Font.Gotham
     input.TextSize = 15
     input.TextColor3 = THEME.Text
-    input.PlaceholderText = "Şifreyi buraya yazın"
+    input.PlaceholderText = "Anahtarı buraya yapıştırın"
     input.PlaceholderColor3 = THEME.Muted
     input.Text = ""
     input.ClearTextOnFocus = false
@@ -372,25 +711,30 @@ local function openAccessPanel()
             return
         end
 
-        local entered = string.match(input.Text, "^%s*(.-)%s*$") or ""
+        local entered = canonicalizeKey(input.Text)
         if entered == "" then
             status.TextColor3 = THEME.Error
-            status.Text = "Lütfen şifreyi girin."
+            status.Text = "Lütfen lisans anahtarını girin."
             return
         end
 
-        if sha256(entered) == PASSWORD_HASHES[expectedIndex] then
+        local ok, result = redeemKey(licenseState, entered)
+        if ok then
             status.TextColor3 = THEME.Success
             status.Text = "Doğrulandı."
             gui:Destroy() -- paneli tamamen sil
-            StartMainScript()
+            StartMainScript(licenseState.active)
             return
         end
 
         failedAttempts += 1
         input.Text = ""
         status.TextColor3 = THEME.Error
-        status.Text = ("Hatalı şifre (%d/%d)"):format(failedAttempts, MAX_ATTEMPTS)
+        if result == "used" then
+            status.Text = ("Bu anahtarın süresi dolmuş (%d/%d)"):format(failedAttempts, MAX_ATTEMPTS)
+        else
+            status.Text = ("Geçersiz anahtar (%d/%d)"):format(failedAttempts, MAX_ATTEMPTS)
+        end
         task.spawn(shake)
 
         if failedAttempts >= MAX_ATTEMPTS then
@@ -428,8 +772,11 @@ end
 -- ==========================================================
 -- 6) ANA FONKSİYON
 -- ==========================================================
-function StartMainScript()
+function StartMainScript(license)
     print("Giriş Başarılı, Sistem Çalışıyor")
+    if license then
+        print("Lisans: " .. describeLicense(license))
+    end
 
     -- ==========================================================
     -- MENÜ KODU: yalnızca doğru şifreden sonra çalışır
@@ -1331,4 +1678,14 @@ function StartMainScript()
     task.spawn(initUI)
 end
 
-openAccessPanel()
+if not hasFileApi then
+    warn("[Lisans] Dosya erişimi yok: süre takibi yalnızca bu oturumda geçerli.")
+end
+
+local licenseState = loadState()
+local licenseStatus, licenseNotice = checkSavedLicense(licenseState)
+if licenseStatus == "ok" then
+    StartMainScript(licenseState.active) -- geçerli lisans var, panel açılmaz
+else
+    openAccessPanel(licenseNotice, licenseState)
+end
